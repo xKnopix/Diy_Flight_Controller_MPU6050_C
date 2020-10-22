@@ -13,7 +13,7 @@ Not finnished yet!!!!!!!!!!!!
 
 -Calc Angels MPU6050 in a sinus curve
 
--Generate PWM (50 HZ) with out Hardware only software!!!
+-Generate PWM (50 HZ) without Hardware only software!!!
 
 -----------------TO-DO-----------------------------------
 -Map Reciver Input
