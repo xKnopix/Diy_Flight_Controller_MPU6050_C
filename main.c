@@ -23,8 +23,8 @@
 ///////////////////////////////////
 /////////MAXANGLE FROM INPUT///////
 //////////////////////////////////
-#define MAXPITCHANGLE 12
-#define MAXROLLANGLE 12 
+#define MAXPITCHANGLE 24.0
+#define MAXROLLANGLE 24.0
 
 ///////////////////////////////////
 /////////Serial////////////////////
@@ -39,8 +39,7 @@
 
 //Variablen MPU6050
 int16_t acc_x,acc_y,acc_z,temp,gyro_x,gyro_y,gyro_z;
-int8_t acc_x_l,acc_y_l,acc_z_l, acc_x_h,acc_y_h,acc_z_h,temp_h, temp_l,
-		gyro_x_h,gyro_y_h,gyro_z_h,gyro_x_l,gyro_y_l,gyro_z_l;
+int8_t bufferMPU[14];
 long acc_total_vector;
 long looptimer;
 float angle_pitch, angle_roll;
@@ -62,21 +61,20 @@ int counterPWM = 0;
 unsigned long timeGenPWMStart = 0;
 
 //Variablen PID
-//Roll
-float pid_p_gain_roll = 0;
-float pid_i_gain_roll = 0;
-float pid_d_gain_roll = 0;
-int pid_max_roll = 400;
-//Pitch
-float pid_p_gain_pitch = 0;
-float pid_i_gain_pitch = 0;
-float pid_d_gain_pitch = 0;
-int pid_max_pitch = 400;
-//Yaw
-float pid_p_gain_yaw = 0;
-float pid_i_gain_yaw = 0;
-float pid_d_gain_yaw = 0;
-int pid_max_yaw = 400;
+//						Roll,Pitch,Yaw	0.0025				
+float p_Settings [3] = {(1/102400),(1/102400),0.15};
+float i_Settings [3] = {0,0,0.0001};
+float d_Settings [3] = {217,217,0};
+float max_Settings [3] = {400,400,400};
+float i_Mem [3] ;
+float pid_soll[3];
+float pid_ist[3];
+float d_last_error [3];
+float pid_error[3];
+float pid_final [3];
+
+int pwm_Motor[4] = {1000,1000,1000,1000};
+
 //Funktionen
 //Funktionen Serielle Kommunikation
 void SetupBaud(void){
@@ -123,7 +121,7 @@ ISR(USART_TX_vect){
 //Funktionen PWM Read
 void PCI_Setup(void){
 	PCICR |=  (1<<PCIE1); //aktiviert Pin Change interupts
-				// CH4			CH3					CH2			CH1
+	// CH4			CH3					CH2			CH1
 	PCMSK1 |= ((1<<PCINT11) | (1<<PCINT10) | (1<<PCINT9) | (1<<PCINT8)); //Aktiviert PIN Change an PCINT 0 bis PCINT3
 
 	serialWrite("PCI Complete");
@@ -134,15 +132,15 @@ void Setup_Timer_1(void){//Timer 0 einstellen (Für PWM Reading)
 	TCCR1A = 0; // set TCCR1A register to 0
 	TCCR1B = 0; // set TCCR1B register to 0
 	TCNT1  = 0; // reset counter value
- 
-	 OCR1A = 1999; // compare match register 1999 Entspricht 1 MS
- 
+	
+	OCR1A = 1999; // compare match register 1999 Entspricht 1 MS
+	
 	// set prescaler to 8
-	 TCCR1B |= (1 << CS11);
- 
+	TCCR1B |= (1 << CS11);
+	
 	TCCR1B |= (1 << WGM12); // turn on CTC mode
 	TIMSK1 |= (1 << OCIE1A); // enable timer compare interrupt
- 
+	
 	sei(); // allow interrupts
 	serialWrite("Timer Complete");
 	_delay_ms(100);
@@ -212,40 +210,33 @@ void MPU_Init(){
 }
 void MPU_Read(){
 	
-		TWIM_Start(0x68,0); //Send start sequence to MPU6050
-		TWIM_Write(0x3B);   //Send starting register
-		TWIM_Stop();		//stops communication
-		TWIM_Start(0x68,1);  //Send request to read 1 ==> read		
-		
-		acc_x_h = (int)TWIM_ReadAck();
-		acc_x_l = (int)TWIM_ReadAck();
-		acc_y_h = (int)TWIM_ReadAck();
-		acc_y_l = (int)TWIM_ReadAck();
-		acc_z_h = (int)TWIM_ReadAck();
-		acc_z_l = (int)TWIM_ReadAck();
-		temp_h = (int)TWIM_ReadAck();
-		temp_l = (int)TWIM_ReadAck();
-		gyro_x_h = (int)TWIM_ReadAck();
-		gyro_x_l = (int)TWIM_ReadAck();
-		gyro_y_h = (int)TWIM_ReadAck();
-		gyro_y_l = (int)TWIM_ReadAck();
-		gyro_z_h = (int)TWIM_ReadAck();
-		gyro_y_l = (int)TWIM_ReadNack();
-		
-		acc_x = (acc_x_h<<8)+acc_x_l;
-		acc_y = (acc_y_h<<8)+acc_y_l;
-		acc_z = (acc_z_h<<8)+acc_z_l;
-		
-		gyro_x = (gyro_x_h<<8)+gyro_x_l;
-		gyro_y = (gyro_y_h<<8)+gyro_y_l;
-		gyro_z = (gyro_z_h<<8)+gyro_z_l;
+	TWIM_Start(0x68,0); //Send start sequence to MPU6050
+	TWIM_Write(0x3B);   //Send starting register
+	TWIM_Stop();		//stops communication
+	TWIM_Start(0x68,1);  //Send request to read 1 ==> read
+	
+	for (int i = 0; i<=13; i++){
+		if (i<13){
+			bufferMPU[i] = (int)TWIM_ReadAck();		//bufferMPU[0] acc_x_h//bufferMPU[1] acc_x_l//bufferMPU[2] acc_y_h//bufferMPU[3] acc_y_l//bufferMPU[4] acc_z_h//bufferMPU[5] acc_z_l//bufferMPU[6] tmp_h//bufferMPU[7] tmp_l//bufferMPU[8] gyro_x_h//bufferMPU[9] gyro_x_l//bufferMPU[10] gyro_y_h//bufferMPU[11] gyro_y_l//bufferMPU[12] gyro_z_h	//bufferMPU[12] gyro_z_l
+		}else{
+			bufferMPU[i] = (int)TWIM_ReadNack();
+		}
+	}
+			
+	acc_x = (bufferMPU[0]<<8)+bufferMPU[1];
+	acc_y = (bufferMPU[2]<<8)+bufferMPU[3];
+	acc_z = (bufferMPU[4]<<8)+bufferMPU[5];
+	
+	gyro_x = (bufferMPU[8]<<8)+bufferMPU[9];
+	gyro_y = (bufferMPU[10]<<8)+bufferMPU[11];
+	gyro_z = (bufferMPU[12]<<8)+bufferMPU[13];
 }
 void Calc_MPU(){
-	angle_pitch += (float)gyro_x * 0.0000611;
-	angle_roll += (float)gyro_y * 0.0000611;
+	angle_pitch += (float)gyro_x * (1/(65.5*400));
+	angle_roll += (float)gyro_y * (1/(65.5*400));
 	
-	angle_pitch += angle_roll * sin((float)gyro_z * 0.000001066);
-	angle_roll -= angle_pitch * sin((float)gyro_z * 0.000001066);
+	angle_pitch += angle_roll * sin((float)gyro_z * (1/(65.5*400)));
+	angle_roll -= angle_pitch * sin((float)gyro_z * (1/(65.5*400)));
 	
 	acc_total_vector = sqrt(((float)acc_x*(float)acc_x)+((float)acc_y*(float)acc_y)+((float)acc_z*(float)acc_z));
 	angle_pitch_acc = asin(((float)acc_y/acc_total_vector))* 57.296;       //Calculate the pitch angle
@@ -261,23 +252,90 @@ void Calc_MPU(){
 	else{                                                                //At first start
 		angle_pitch = angle_pitch_acc;                                     //Set the gyro pitch angle equal to the accelerometer pitch angle
 		angle_roll = angle_roll_acc;                                       //Set the gyro roll angle equal to the accelerometer roll angle
-		set_gyro_angles = 1;  
-		}
-		
-	angle_pitch_output = angle_pitch_output * 0.95 + angle_pitch * 0.05;   //Take 90% of the output pitch value and add 10% of the raw pitch value
-	angle_roll_output = angle_roll_output * 0.95 + angle_roll * 0.05;                                          //Set the IMU started flag
+		set_gyro_angles = 1;
+	}
+	pid_ist[1] = pid_ist[1] * 0.95 + angle_pitch * 0.05;   //Take 90% of the output pitch value and add 10% of the raw pitch value
+	pid_ist[0] = pid_ist[0] * 0.95 + angle_roll * 0.05;                                          //Set the IMU started flag
 }
 
+
+//Funktionen PID
+float mapInput(int x, float input_from, float input_to, float output_from, float output_to){
+	//			  m	*x +b
+	float m = (output_to-(output_from))/(input_to-(input_from));
+	float b = (output_from-m*input_from);
+	return m*x + (b);
+}
+void Calc_Pid(){
+	//Roll
+	pid_soll[0] = mapInput((int)ch1pwm,1000,2000,-(MAXROLLANGLE),MAXROLLANGLE);
+	//Pitch
+	pid_soll[1] = mapInput((int)ch2pwm,1000,2000,MAXPITCHANGLE,-(MAXPITCHANGLE));//Inverted because if quadcopter is moving forward pitch will be 0 to -12
+	//Yaw
+	pid_soll[2] = ch4pwm;
+	pid_ist[2] = mapInput((int)gyro_z,-32750,32750,1000,2000);
+	if (pid_ist[2]>=1480 && pid_ist[2]<=1520){ //Zittern ausgleichen
+		pid_ist[2] =1500;
+	}
+	//Loop 3x;  0 = Roll 1 =Pitch 2 =Yaw; Berechnung der PID Werte
+	for (int i = 0; i<3; i++){
+		pid_error[i] = pid_ist[i]*10 - pid_soll[i]*10; //ERROR berechnen
+		//i_Mem[0] = Error speicher von Roll
+		i_Mem[i] += i_Settings[i] * pid_error[i]; //I Roll berechnen
+		//Begrenzt i
+		if(i_Mem[i] > max_Settings[i])i_Mem[i] = max_Settings[i];
+		else if(i_Mem[i] < (max_Settings[i] * -1)) i_Mem[i] = (max_Settings[i]*-1);
+		//Berechne PID Wert
+		pid_final[i] = p_Settings[i] * pid_error[i] + i_Mem[i] + d_Settings[i] * (pid_error[i] - d_last_error[i]);
+		d_last_error[i] = pid_error[i];
+		//Limitiere PID Wert
+		if(pid_final[i] > max_Settings[i])pid_final[i] = max_Settings[i];
+		else if(pid_final[i] < (max_Settings[i] * -1)) pid_final[i] = (max_Settings[i]*-1);
+	}
+}
+void limit_Motor(void){
+	//Verhindert dass die Motoren an gehen wenn sick auf 0 ist
+	if(ch3pwm <1020){
+		for (int i = 0; i<4;i++){
+			pwm_Motor[i] = 1000;
+		}
+		}else{
+		//limitiert den maximalen output auf 2000ms
+		for(int i =0; i<4;i++){
+			if(pwm_Motor[i]>2000){
+				pwm_Motor[i] =2000;
+			}
+		}
+		//Verhindert dass die motoren ausgehen wenn man am fliegen ist
+		for (int i = 0; i <4;i++){
+			if (pwm_Motor[i] <1100){
+				pwm_Motor[i] =1100;
+			}
+		}
+	}
+}
+
+void Calc_Motor_Speed(){
+	//ch3pwm = speed; pid_final[0] = Pid Roll; pid_final[1] = Pid Pitch; pid_final[2] = Pid Yaw
+	pwm_Motor[0] = ch3pwm - pid_final[0] - pid_final[1] - pid_final[2];
+	pwm_Motor[1] = ch3pwm + pid_final[0] - pid_final[1] + pid_final[2];
+	pwm_Motor[2] = ch3pwm + pid_final[0] + pid_final[1] - pid_final[2];
+	pwm_Motor[3] = ch3pwm - pid_final[0] + pid_final[1] + pid_final[2];
+	
+	limit_Motor();
+}
+
+
 //Funktionen PWM Generieren
-void Gen_PWM(int M1_Val, int M2_Val, int M3_Val, int M4_Val){//Gernerates 50 Herz PWM signal 
-	// Ein Loop == 4 ms ==> 50 HZ ==> 20ms ==> in jedem 5. lauf wird ein neues signal erzeugt
-	counterPWM++;
-	if(counterPWM >= 5){// in jedem 5. durchlauf ==> 50 HZ
+void Gen_PWM(int M1_Val, int M2_Val, int M3_Val, int M4_Val){
 		timeGenPWMStart = micros();
 		PORTD |= ((1<<5) | (1<<6) | (1<<7)); // setzt bits PD5,PD6,PD7
 		PORTB |= (1<<0); //setzt bit PB0
 		while (micros() - timeGenPWMStart <=1000){//Hier kann man noch was machen max 1 ms
-			
+			MPU_Read();
+			Calc_MPU();
+			Calc_Pid();
+			Calc_Motor_Speed();
 		}
 		while (micros() - timeGenPWMStart <=2000){//die nächsten 2 ms macht er die Signale
 			if(micros() - timeGenPWMStart >=M1_Val){
@@ -293,54 +351,35 @@ void Gen_PWM(int M1_Val, int M2_Val, int M3_Val, int M4_Val){//Gernerates 50 Her
 				PORTB &= ~(1<<0); //löscht bit an PB0
 			}
 		}
-		counterPWM= 0;
-	}
-}
-
-//Funktionen PID
-int mapInput(int input_start, int input_end, int output_start, int output_end, int input){
-	return (output_start + ((output_end - output_start) / (input_end - input_start)) * (input - input_start));
-}
-void Calc_Pid(){
-	int soll_roll = mapInput(1000,2000,-12,12,(int)ch1pwm);
-	int soll_pitch = mapInput(1000,2000,-(MAXPITCHANGLE),MAXPITCHANGLE,(int)ch2pwm);
-	itoa((int)soll_roll, INPUT, 10);
-	serialWrite(INPUT);
-	itoa((int)soll_pitch, INPUT, 10);
-	serialWrite(INPUT);
-	serialWrite("\n");
+		PORTD &= ~((1<<5) | (1<<6)|(1<<7));
+		PORTB &= ~(1<<0);
+		
 }
 
 //Main
 int main(void)
 {
-	//init Urat
 	SetupBaud();
-	//Init Pin Change
 	PCI_Setup();
-	//Setup Timer 0
 	Setup_Timer_1();
-	//Setup I2C
 	TWIM_Init(400000);
 	MPU_Init();
 	
-	//Ports I/O
-	DDRB = 0xFF; //Setzt Port D auf Augang
-	DDRD = 0xFF; // Setzt Port D auf 0 ==> Port D = Eingang
-	DDRC = 0x00; //Setzt Port B auf 0 ==> input
+	//Ports I/O ???? noch genauer definieren 
+	DDRB = 0x00; //Setzt Port D auf Augang
+	DDRD = 0x00; // Setzt Port D auf 0 ==> Port D = Eingang
+	DDRC = 0x00; //Setzt Port C auf 0 ==> input
 	
-	sei();		//Aktiviert Interrupts
-	serialWrite("loop");
 	looptimer = micros();
 	while (1) {
-		if (counterPWM <5){// Neuer Winkel wird nur dann berechnet wenn kein PWM erzeugt wird
-		MPU_Read();
-		Calc_MPU();
-		}
-		Calc_Pid();
+		
+		ltoa((long)pid_ist[1], INPUT,10);
+		serialWrite(INPUT);
+		serialWrite("\n");
 		Gen_PWM(ch3pwm,ch3pwm,ch3pwm,ch3pwm);
-		 while(micros() - looptimer <4000);                                 //Wait until the loop_timer reaches 4000us (250Hz) before starting the next loop
-		 looptimer = micros();
+		/*Gen_PWM((int)pwm_Motor[0],(int)pwm_Motor[1],(int)pwm_Motor[2],(int)pwm_Motor[3]);*/
+		while(micros() - looptimer <2500);                                 //Wait until the loop_timer reaches 2500us (400Hz) before starting the next loop
+		looptimer = micros();
 	}
 }
 
